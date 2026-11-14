@@ -249,6 +249,21 @@ func (e *BatchPointGetExec) Next(ctx context.Context, req *chunk.Chunk) error {
 	return nil
 }
 
+type regionCacheBatchRefresher interface {
+	RefreshRegionCacheForKeys(context.Context, []kv.Key) error
+}
+
+func (e *BatchPointGetExec) refreshRegionCacheForKeys(ctx context.Context, keys []kv.Key) error {
+	if !e.Ctx().GetSessionVars().FoundInPlanCache || len(keys) == 0 {
+		return nil
+	}
+	store, ok := e.Ctx().GetStore().(regionCacheBatchRefresher)
+	if !ok {
+		return nil
+	}
+	return store.RefreshRegionCacheForKeys(ctx, keys)
+}
+
 func (e *BatchPointGetExec) initialize(ctx context.Context) error {
 	var handleVals map[string]kv.ValueEntry
 	var indexKeys []kv.Key
@@ -315,6 +330,9 @@ func (e *BatchPointGetExec) initialize(ctx context.Context) error {
 		}
 
 		// Fetch all handles.
+		if err = e.refreshRegionCacheForKeys(ctx, toFetchIndexKeys); err != nil {
+			return err
+		}
 		handleVals, err = batchGetter.BatchGet(ctx, toFetchIndexKeys)
 		if err != nil {
 			return err
@@ -441,6 +459,9 @@ func (e *BatchPointGetExec) initialize(ctx context.Context) error {
 		}
 	}
 	// Fetch all values.
+	if err = e.refreshRegionCacheForKeys(ctx, keys); err != nil {
+		return err
+	}
 	values, err = batchGetter.BatchGet(ctx, keys)
 	if err != nil {
 		return err
