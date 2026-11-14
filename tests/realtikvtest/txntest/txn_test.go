@@ -152,9 +152,8 @@ func TestPreparedPointGetRefreshesRegionCacheAfterSplit(t *testing.T) {
 	// Keep the prepared statement's session untouched: splitting a region does
 	// not change the table schema, so the next execute must reuse its cached plan.
 	//
-	// The TiKV store invalidates only the routes involved in a successful split.
-	// The cache-hit point get therefore reloads the child region on its ordinary
-	// RegionCache miss, rather than forcing a PD lookup on every reuse.
+	// The split leaves this client's cached parent route intact. The reused
+	// point-get executor refreshes that route before it sends CmdGet.
 	splitTK.MustQuery("split table region_cache_plan_cache by (50)").Check(testkit.Rows("1 1"))
 
 	// The first request from the cache-hit execution must already use the
