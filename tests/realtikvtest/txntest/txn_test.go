@@ -124,7 +124,7 @@ func TestPreparedPointGetRefreshesRegionCacheAfterSplit(t *testing.T) {
 	executeAndCaptureEpoch := func() regionEpoch {
 		var epoch regionEpoch
 		ctx := context.WithValue(context.Background(), "onRPCFinishedHook", func(req *tikvrpc.Request, resp *tikvrpc.Response, err error) (*tikvrpc.Response, error) {
-			if req.Type == tikvrpc.CmdGet && epoch.id == 0 {
+			if req.Type == tikvrpc.CmdGet && epoch.id == 0 && req.RegionEpoch != nil {
 				epoch.id = req.RegionId
 				epoch.version = req.RegionEpoch.Version
 				epoch.confVer = req.RegionEpoch.ConfVer
