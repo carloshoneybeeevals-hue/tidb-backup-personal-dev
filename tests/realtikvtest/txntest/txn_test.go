@@ -217,6 +217,72 @@ func TestPreparedBatchPointGetRefreshesRegionCacheAfterSplit(t *testing.T) {
 	require.NotEqual(t, beforeSplit.version, afterSplit.version)
 }
 
+
+func TestPreparedUniqueIndexPointGetRefreshesBothRegionRoutesAfterSplit(t *testing.T) {
+	require.NoError(t, failpoint.Enable("tikvclient/onRPCFinishedHook", "return"))
+	t.Cleanup(func() {
+		require.NoError(t, failpoint.Disable("tikvclient/onRPCFinishedHook"))
+	})
+
+	store := realtikvtest.CreateMockStoreAndSetup(t)
+	tk := testkit.NewTestKit(t, store)
+	splitTK := testkit.NewTestKit(t, store)
+	tk.MustExec("use test")
+	splitTK.MustExec("use test")
+	tk.MustExec("set tidb_enable_prepared_plan_cache = 1")
+	tk.MustExec("create table unique_index_region_cache (id int primary key, u int unique, v int)")
+	tk.MustExec("insert into unique_index_region_cache values (100, 100, 1)")
+
+	stmtID, _, _, err := tk.Session().PrepareStmt(
+		"select v from unique_index_region_cache where u = ?",
+	)
+	require.NoError(t, err)
+
+	type regionEpoch struct {
+		id      uint64
+		version uint64
+		confVer uint64
+	}
+	executeAndCaptureEpochs := func() []regionEpoch {
+		var epochs []regionEpoch
+		ctx := context.WithValue(context.Background(), "onRPCFinishedHook", func(req *tikvrpc.Request, resp *tikvrpc.Response, err error) (*tikvrpc.Response, error) {
+			if req.Type == tikvrpc.CmdGet && req.RegionEpoch != nil {
+				epochs = append(epochs, regionEpoch{
+					id:      req.RegionId,
+					version: req.RegionEpoch.Version,
+					confVer: req.RegionEpoch.ConfVer,
+				})
+			}
+			return resp, err
+		})
+
+		rs, err := tk.Session().ExecutePreparedStmt(ctx, stmtID, expression.Args2Expressions4Test(100))
+		require.NoError(t, err)
+		tk.ResultSetToResult(rs, fmt.Sprintf("%v", rs)).Check(testkit.Rows("1"))
+		require.Len(t, epochs, 2)
+		return epochs
+	}
+
+	// The first execution warms the plan cache and the parent-region route for
+	// both the unique-index key and the record key.
+	beforeSplit := executeAndCaptureEpochs()
+	parentRoute := beforeSplit[0]
+
+	// Index keys sort before record keys. Splitting the record range at 50
+	// therefore leaves the unique-index key in the parent region and moves the
+	// record key for id=100 into a different child region.
+	splitTK.MustQuery("split table unique_index_region_cache by (50)").Check(testkit.Rows("1 1"))
+
+	afterSplit := executeAndCaptureEpochs()
+	tk.MustQuery("select @@last_plan_from_cache").Check(testkit.Rows("1"))
+
+	// Neither read may be sent with the parent epoch warmed before the split.
+	for _, route := range afterSplit {
+		require.NotEqual(t, parentRoute, route)
+	}
+	require.NotEqual(t, afterSplit[0].id, afterSplit[1].id)
+}
+
 func TestTxnGoString(t *testing.T) {
 	store := realtikvtest.CreateMockStoreAndSetup(t)
 
