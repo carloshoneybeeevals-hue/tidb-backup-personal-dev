@@ -307,6 +307,20 @@ func (d *TiKVDriver) pdClientOptions() []opt.ClientOption {
 	return opts
 }
 
+const refreshRegionCacheMaxBackoff = 20_000
+
+// RefreshRegionCacheForKey invalidates and reloads the local RegionCache entry
+// covering key. It is used by a reused point-get executor before it sends a
+// new request, so a Region split cannot reuse the route from an earlier execute.
+func (s *tikvStore) RefreshRegionCacheForKey(ctx context.Context, key []byte) error {
+	cache := s.GetRegionCache()
+	if loc := cache.TryLocateKey(key); loc != nil {
+		cache.InvalidateCachedRegion(loc.Region)
+	}
+	_, err := cache.LocateKey(tikv.NewBackoffer(ctx, refreshRegionCacheMaxBackoff), key)
+	return err
+}
+
 type tikvStore struct {
 	*tikv.KVStore
 	tlsConfig *tls.Config
