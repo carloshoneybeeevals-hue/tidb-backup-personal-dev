@@ -102,6 +102,11 @@ func TestInTxnPSProtoPointGet(t *testing.T) {
 
 
 func TestPreparedPointGetRefreshesRegionCacheAfterSplit(t *testing.T) {
+	require.NoError(t, failpoint.Enable("tikvclient/onRPCFinishedHook", "return"))
+	t.Cleanup(func() {
+		require.NoError(t, failpoint.Disable("tikvclient/onRPCFinishedHook"))
+	})
+
 	store := realtikvtest.CreateMockStoreAndSetup(t)
 	tk := testkit.NewTestKit(t, store)
 	splitTK := testkit.NewTestKit(t, store)
@@ -146,6 +151,11 @@ func TestPreparedPointGetRefreshesRegionCacheAfterSplit(t *testing.T) {
 
 	// Keep the prepared statement's session untouched: splitting a region does
 	// not change the table schema, so the next execute must reuse its cached plan.
+	//
+	// SplitRegions sends CmdSplitRegion through the warmed RegionCache but does
+	// not install the SplitRegion response in that cache. Consequently this
+	// store still holds beforeSplit until the cached point-get execution refreshes
+	// it below.
 	splitTK.MustQuery("split table region_cache_plan_cache by (50)").Check(testkit.Rows("1 1"))
 
 	// The first request from the cache-hit execution must already use the
