@@ -101,7 +101,6 @@ func TestInTxnPSProtoPointGet(t *testing.T) {
 	tk.MustExec("commit")
 }
 
-
 func TestPreparedPointGetRefreshesRegionCacheAfterSplit(t *testing.T) {
 	require.NoError(t, failpoint.Enable("tikvclient/onRPCFinishedHook", "return"))
 	t.Cleanup(func() {
@@ -166,7 +165,6 @@ func TestPreparedPointGetRefreshesRegionCacheAfterSplit(t *testing.T) {
 	require.NotEqual(t, beforeSplit.version, afterSplit.version)
 }
 
-
 func TestPreparedBatchPointGetRefreshesRegionCacheAfterSplit(t *testing.T) {
 	require.NoError(t, failpoint.Enable("tikvclient/onRPCFinishedHook", "return"))
 	t.Cleanup(func() {
@@ -217,7 +215,6 @@ func TestPreparedBatchPointGetRefreshesRegionCacheAfterSplit(t *testing.T) {
 	require.NotEqual(t, beforeSplit.id, afterSplit.id)
 	require.NotEqual(t, beforeSplit.version, afterSplit.version)
 }
-
 
 func TestPreparedUniqueIndexPointGetRefreshesBothRegionRoutesAfterSplit(t *testing.T) {
 	require.NoError(t, failpoint.Enable("tikvclient/onRPCFinishedHook", "return"))
@@ -283,7 +280,6 @@ func TestPreparedUniqueIndexPointGetRefreshesBothRegionRoutesAfterSplit(t *testi
 	}
 	require.NotEqual(t, afterSplit[0].id, afterSplit[1].id)
 }
-
 
 func TestPreparedPointGetRefreshesRegionCacheAfterMerge(t *testing.T) {
 	require.NoError(t, failpoint.Enable("tikvclient/onRPCFinishedHook", "return"))
