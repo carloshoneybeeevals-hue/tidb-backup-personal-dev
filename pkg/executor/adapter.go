@@ -429,7 +429,7 @@ func (a *ExecStmt) PointGet(ctx context.Context) (*recordSet, error) {
 		} else {
 			// CachedPlan type is already checked in last step
 			pointGetPlan := a.Plan.(*physicalop.PointGetPlan)
-			exec.Recreated(pointGetPlan, a.Ctx)
+			exec.Recreated(pointGetPlan, a.Ctx, startTs)
 			a.PsStmt.PointGet.Executor = exec
 			executor = exec
 			// If reuses the executor, the executor build phase is skipped, and the txn will not be activated that
