@@ -119,17 +119,17 @@ type PointGetExecutor struct {
 	exec.BaseExecutor
 	indexUsageReporter *exec.IndexUsageReporter
 
-	tblInfo          *model.TableInfo
-	handle           kv.Handle
-	idxInfo          *model.IndexInfo
-	partitionDefIdx  *int
-	partitionNames   []ast.CIStr
-	idxKey           kv.Key
-	handleVal        []byte
-	idxVals          []types.Datum
-	txnScope         string
-	readReplicaScope string
-	isStaleness      bool
+	tblInfo                     *model.TableInfo
+	handle                      kv.Handle
+	idxInfo                     *model.IndexInfo
+	partitionDefIdx             *int
+	partitionNames              []ast.CIStr
+	idxKey                      kv.Key
+	handleVal                   []byte
+	idxVals                     []types.Datum
+	txnScope                    string
+	readReplicaScope            string
+	isStaleness                 bool
 	txn                         kv.Transaction
 	snapshot                    kv.Snapshot
 	refreshRegionCacheBeforeGet bool
