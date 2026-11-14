@@ -131,7 +131,8 @@ type PointGetExecutor struct {
 	readReplicaScope string
 	isStaleness      bool
 	txn              kv.Transaction
-	snapshot                kv.Snapshot
+	snapshot                    kv.Snapshot
+	refreshRegionCacheBeforeGet bool
 	done                    bool
 	lock             bool
 	lockWaitTime     int64
@@ -187,6 +188,7 @@ func (e *PointGetExecutor) Recreated(p *physicalop.PointGetPlan, ctx sessionctx.
 	// A reused executor also reuses its KVSnapshot. Resetting its timestamp clears
 	// the snapshot-local result cache before the next execution can route a request.
 	e.snapshot.SetOption(kv.SnapshotTS, snapshotTS)
+	e.refreshRegionCacheBeforeGet = true
 
 	// It's necessary to at least reset the `runtimeStats` of the `BaseExecutor`.
 	// As the `StmtCtx` may have changed, a new index usage reporter should also be created.
@@ -656,9 +658,27 @@ func (e *PointGetExecutor) getValueFromLockCtx(ctx context.Context,
 }
 // get will first try to get from txn buffer, then check the pessimistic lock cache,
 // then the store. Kv.ErrNotExist will be returned if key is not found
+type regionCacheRefresher interface {
+	RefreshRegionCacheForKey(context.Context, []byte) error
+}
+
+func (e *PointGetExecutor) refreshRegionCacheForKey(ctx context.Context, key kv.Key) error {
+	if !e.refreshRegionCacheBeforeGet {
+		return nil
+	}
+	store, ok := e.Ctx().GetStore().(regionCacheRefresher)
+	if !ok {
+		return nil
+	}
+	return store.RefreshRegionCacheForKey(ctx, key)
+}
+
 func (e *PointGetExecutor) get(ctx context.Context, key kv.Key) ([]byte, error) {
 	if len(key) == 0 {
 		return nil, kv.ErrNotExist
+	}
+	if err := e.refreshRegionCacheForKey(ctx, key); err != nil {
+		return nil, err
 	}
 	var (
 		val []byte
