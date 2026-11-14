@@ -313,12 +313,12 @@ const refreshRegionCacheMaxBackoff = 20_000
 // covering key. A reused point-get executor calls it before issuing a read, so
 // it cannot send a request with an epoch from an earlier execution.
 func (s *tikvStore) RefreshRegionCacheForKey(ctx context.Context, key []byte) error {
-	return s.RefreshRegionCacheForKeys(ctx, [][]byte{key})
+	return s.RefreshRegionCacheForKeys(ctx, []kv.Key{key})
 }
 
 // RefreshRegionCacheForKeys invalidates and reloads the cached regions covering
 // keys. Invalidating before locating deduplicates keys in the same old region.
-func (s *tikvStore) RefreshRegionCacheForKeys(ctx context.Context, keys [][]byte) error {
+func (s *tikvStore) RefreshRegionCacheForKeys(ctx context.Context, keys []kv.Key) error {
 	cache := s.GetRegionCache()
 	for _, key := range keys {
 		if loc := cache.TryLocateKey(key); loc != nil {
