@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"net/http"
 	"strconv"
 	"sync"
 	"testing"
@@ -281,6 +282,99 @@ func TestPreparedUniqueIndexPointGetRefreshesBothRegionRoutesAfterSplit(t *testi
 		require.NotEqual(t, parentRoute, route)
 	}
 	require.NotEqual(t, afterSplit[0].id, afterSplit[1].id)
+}
+
+
+func TestPreparedPointGetRefreshesRegionCacheAfterMerge(t *testing.T) {
+	require.NoError(t, failpoint.Enable("tikvclient/onRPCFinishedHook", "return"))
+	t.Cleanup(func() {
+		require.NoError(t, failpoint.Disable("tikvclient/onRPCFinishedHook"))
+	})
+
+	store := realtikvtest.CreateMockStoreAndSetup(t)
+	tk := testkit.NewTestKit(t, store)
+	splitTK := testkit.NewTestKit(t, store)
+	tk.MustExec("use test")
+	splitTK.MustExec("use test")
+	tk.MustExec("set tidb_enable_prepared_plan_cache = 1")
+	tk.MustExec("create table merge_region_cache_plan_cache (id int primary key, v int)")
+	tk.MustExec("insert into merge_region_cache_plan_cache values (100, 1)")
+
+	stmtID, _, _, err := tk.Session().PrepareStmt(
+		"select v from merge_region_cache_plan_cache where id = ?",
+	)
+	require.NoError(t, err)
+
+	type regionEpoch struct {
+		id      uint64
+		version uint64
+	}
+	executeAndCaptureEpochs := func() []regionEpoch {
+		var epochs []regionEpoch
+		ctx := context.WithValue(context.Background(), "onRPCFinishedHook", func(req *tikvrpc.Request, resp *tikvrpc.Response, err error) (*tikvrpc.Response, error) {
+			if req.Type == tikvrpc.CmdGet && req.RegionEpoch != nil {
+				epochs = append(epochs, regionEpoch{
+					id:      req.RegionId,
+					version: req.RegionEpoch.Version,
+				})
+			}
+			return resp, err
+		})
+
+		rs, err := tk.Session().ExecutePreparedStmt(ctx, stmtID, expression.Args2Expressions4Test(100))
+		require.NoError(t, err)
+		tk.ResultSetToResult(rs, fmt.Sprintf("%v", rs)).Check(testkit.Rows("1"))
+		require.NotEmpty(t, epochs)
+		return epochs
+	}
+
+	executeAndCaptureEpochs() // warm the prepared plan and parent route
+	splitTK.MustQuery("split table merge_region_cache_plan_cache by (50)").Check(testkit.Rows("1 1"))
+
+	// Warm the cache with the right child containing record key 100.
+	afterSplit := executeAndCaptureEpochs()
+	require.Len(t, afterSplit, 1)
+	sourceRegionID := afterSplit[0].id
+
+	regions := tk.MustQuery("show table merge_region_cache_plan_cache regions").Rows()
+	require.Len(t, regions, 2)
+	var targetRegionID uint64
+	for _, region := range regions {
+		regionID, err := strconv.ParseUint(fmt.Sprint(region[0]), 10, 64)
+		require.NoError(t, err)
+		if regionID != sourceRegionID {
+			targetRegionID = regionID
+			break
+		}
+	}
+	require.NotZero(t, targetRegionID)
+
+	// Use PD's real merge operator; this is not a mock topology change.
+	request, err := http.NewRequest(
+		http.MethodPost,
+		"http://"+realtikvtest.PDAddr+"/pd/api/v1/operators",
+		bytes.NewBufferString(fmt.Sprintf(
+			"{\"name\":\"merge-region\",\"source_region_id\":%d,\"target_region_id\":%d}",
+			sourceRegionID,
+			targetRegionID,
+		)),
+	)
+	require.NoError(t, err)
+	request.Header.Set("Content-Type", "application/json")
+	response, err := http.DefaultClient.Do(request)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, response.StatusCode)
+	require.NoError(t, response.Body.Close())
+
+	require.Eventually(t, func() bool {
+		return len(tk.MustQuery("show table merge_region_cache_plan_cache regions").Rows()) == 1
+	}, 30*time.Second, 100*time.Millisecond)
+
+	afterMerge := executeAndCaptureEpochs()
+	tk.MustQuery("select @@last_plan_from_cache").Check(testkit.Rows("1"))
+	require.Len(t, afterMerge, 1)
+	require.Equal(t, targetRegionID, afterMerge[0].id)
+	require.NotEqual(t, afterSplit[0], afterMerge[0])
 }
 
 func TestTxnGoString(t *testing.T) {
