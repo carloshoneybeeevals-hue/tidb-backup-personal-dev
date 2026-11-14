@@ -318,6 +318,8 @@ func (s *tikvStore) RefreshRegionCacheForKey(ctx context.Context, key []byte) er
 
 // RefreshRegionCacheForKeys invalidates and reloads the cached regions covering
 // keys. Invalidating before locating deduplicates keys in the same old region.
+// This deliberately costs one PD lookup per cache hit: without a topology watch,
++// only PD can prove that a split or merge has changed the epoch before TiKV sees it.
 func (s *tikvStore) RefreshRegionCacheForKeys(ctx context.Context, keys []kv.Key) error {
 	cache := s.GetRegionCache()
 	for _, key := range keys {
