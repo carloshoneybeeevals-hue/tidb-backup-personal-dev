@@ -130,13 +130,13 @@ type PointGetExecutor struct {
 	txnScope         string
 	readReplicaScope string
 	isStaleness      bool
-	txn              kv.Transaction
+	txn                         kv.Transaction
 	snapshot                    kv.Snapshot
 	refreshRegionCacheBeforeGet bool
-	done                    bool
-	lock             bool
-	lockWaitTime     int64
-	rowDecoder       *rowcodec.ChunkDecoder
+	done                        bool
+	lock                        bool
+	lockWaitTime                int64
+	rowDecoder                  *rowcodec.ChunkDecoder
 
 	columns []*model.ColumnInfo
 	// virtualColumnIndex records all the indices of virtual columns and sort them in definition
