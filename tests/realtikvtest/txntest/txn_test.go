@@ -100,6 +100,63 @@ func TestInTxnPSProtoPointGet(t *testing.T) {
 	tk.MustExec("commit")
 }
 
+
+func TestPreparedPointGetRefreshesRegionCacheAfterSplit(t *testing.T) {
+	store := realtikvtest.CreateMockStoreAndSetup(t)
+	tk := testkit.NewTestKit(t, store)
+	splitTK := testkit.NewTestKit(t, store)
+	tk.MustExec("use test")
+	splitTK.MustExec("use test")
+	tk.MustExec("set tidb_enable_prepared_plan_cache = 1")
+	tk.MustExec("create table region_cache_plan_cache (id int primary key, v int)")
+	tk.MustExec("insert into region_cache_plan_cache values (100, 1)")
+
+	stmtID, _, _, err := tk.Session().PrepareStmt(
+		"select v from region_cache_plan_cache where id = ?",
+	)
+	require.NoError(t, err)
+
+	type regionEpoch struct {
+		id      uint64
+		version uint64
+		confVer uint64
+	}
+	executeAndCaptureEpoch := func() regionEpoch {
+		var epoch regionEpoch
+		ctx := context.WithValue(context.Background(), "onRPCFinishedHook", func(req *tikvrpc.Request, resp *tikvrpc.Response, err error) (*tikvrpc.Response, error) {
+			if req.Type == tikvrpc.CmdGet && epoch.id == 0 {
+				epoch.id = req.RegionId
+				epoch.version = req.RegionEpoch.Version
+				epoch.confVer = req.RegionEpoch.ConfVer
+			}
+			return resp, err
+		})
+
+		rs, err := tk.Session().ExecutePreparedStmt(ctx, stmtID, expression.Args2Expressions4Test(100))
+		require.NoError(t, err)
+		tk.ResultSetToResult(rs, fmt.Sprintf("%v", rs)).Check(testkit.Rows("1"))
+		require.NotZero(t, epoch.id)
+		require.NotZero(t, epoch.version)
+		return epoch
+	}
+
+	// Warm both the prepared-plan cache and the RegionCache with the parent
+	// region route for key 100.
+	beforeSplit := executeAndCaptureEpoch()
+
+	// Keep the prepared statement's session untouched: splitting a region does
+	// not change the table schema, so the next execute must reuse its cached plan.
+	splitTK.MustQuery("split table region_cache_plan_cache by (50)").Check(testkit.Rows("1 1"))
+
+	// The first request from the cache-hit execution must already use the
+	// post-split region. Without the refresh this first request uses
+	// beforeSplit and client-go only corrects it after an EpochNotMatch retry.
+	afterSplit := executeAndCaptureEpoch()
+	tk.MustQuery("select @@last_plan_from_cache").Check(testkit.Rows("1"))
+	require.NotEqual(t, beforeSplit.id, afterSplit.id)
+	require.NotEqual(t, beforeSplit.version, afterSplit.version)
+}
+
 func TestTxnGoString(t *testing.T) {
 	store := realtikvtest.CreateMockStoreAndSetup(t)
 
