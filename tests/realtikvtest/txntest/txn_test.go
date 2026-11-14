@@ -165,6 +165,58 @@ func TestPreparedPointGetRefreshesRegionCacheAfterSplit(t *testing.T) {
 	require.NotEqual(t, beforeSplit.version, afterSplit.version)
 }
 
+
+func TestPreparedBatchPointGetRefreshesRegionCacheAfterSplit(t *testing.T) {
+	require.NoError(t, failpoint.Enable("tikvclient/onRPCFinishedHook", "return"))
+	t.Cleanup(func() {
+		require.NoError(t, failpoint.Disable("tikvclient/onRPCFinishedHook"))
+	})
+
+	store := realtikvtest.CreateMockStoreAndSetup(t)
+	tk := testkit.NewTestKit(t, store)
+	splitTK := testkit.NewTestKit(t, store)
+	tk.MustExec("use test")
+	splitTK.MustExec("use test")
+	tk.MustExec("set tidb_enable_prepared_plan_cache = 1")
+	tk.MustExec("create table batch_region_cache_plan_cache (id int primary key, v int)")
+	tk.MustExec("insert into batch_region_cache_plan_cache values (100, 1), (101, 2)")
+
+	stmtID, _, _, err := tk.Session().PrepareStmt(
+		"select v from batch_region_cache_plan_cache where id in (?, ?)",
+	)
+	require.NoError(t, err)
+
+	type regionEpoch struct {
+		id      uint64
+		version uint64
+	}
+	executeAndCaptureEpoch := func() regionEpoch {
+		var epoch regionEpoch
+		ctx := context.WithValue(context.Background(), "onRPCFinishedHook", func(req *tikvrpc.Request, resp *tikvrpc.Response, err error) (*tikvrpc.Response, error) {
+			if req.Type == tikvrpc.CmdBatchGet && epoch.id == 0 && req.RegionEpoch != nil {
+				epoch.id = req.RegionId
+				epoch.version = req.RegionEpoch.Version
+			}
+			return resp, err
+		})
+
+		rs, err := tk.Session().ExecutePreparedStmt(ctx, stmtID, expression.Args2Expressions4Test(100, 101))
+		require.NoError(t, err)
+		tk.ResultSetToResult(rs, fmt.Sprintf("%v", rs)).Sort().Check(testkit.Rows("1", "2"))
+		require.NotZero(t, epoch.id)
+		require.NotZero(t, epoch.version)
+		return epoch
+	}
+
+	beforeSplit := executeAndCaptureEpoch()
+	splitTK.MustQuery("split table batch_region_cache_plan_cache by (50)").Check(testkit.Rows("1 1"))
+
+	afterSplit := executeAndCaptureEpoch()
+	tk.MustQuery("select @@last_plan_from_cache").Check(testkit.Rows("1"))
+	require.NotEqual(t, beforeSplit.id, afterSplit.id)
+	require.NotEqual(t, beforeSplit.version, afterSplit.version)
+}
+
 func TestTxnGoString(t *testing.T) {
 	store := realtikvtest.CreateMockStoreAndSetup(t)
 
