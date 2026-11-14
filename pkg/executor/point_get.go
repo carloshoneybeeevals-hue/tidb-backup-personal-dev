@@ -182,8 +182,12 @@ func matchPartitionNames(pid int64, partitionNames []ast.CIStr, pi *model.Partit
 	return false
 }
 
-// Recreated based on Init, change baseExecutor fields also
-func (e *PointGetExecutor) Recreated(p *physicalop.PointGetPlan, ctx sessionctx.Context) {
+// Recreated resets a cached point-get executor for a new statement execution.
+func (e *PointGetExecutor) Recreated(p *physicalop.PointGetPlan, ctx sessionctx.Context, snapshotTS uint64) {
+	// A reused executor also reuses its KVSnapshot. Resetting its timestamp clears
+	// the snapshot-local result cache before the next execution can route a request.
+	e.snapshot.SetOption(kv.SnapshotTS, snapshotTS)
+
 	// It's necessary to at least reset the `runtimeStats` of the `BaseExecutor`.
 	// As the `StmtCtx` may have changed, a new index usage reporter should also be created.
 	e.BaseExecutor = exec.NewBaseExecutor(ctx, p.Schema(), p.ID())
