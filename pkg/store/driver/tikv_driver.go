@@ -307,18 +307,22 @@ func (d *TiKVDriver) pdClientOptions() []opt.ClientOption {
 	return opts
 }
 
-const refreshRegionCacheMaxBackoff = 20_000
-
-// RefreshRegionCacheForKey invalidates and reloads the local RegionCache entry
-// covering key. It is used by a reused point-get executor before it sends a
-// new request, so a Region split cannot reuse the route from an earlier execute.
-func (s *tikvStore) RefreshRegionCacheForKey(ctx context.Context, key []byte) error {
-	cache := s.GetRegionCache()
-	if loc := cache.TryLocateKey(key); loc != nil {
-		cache.InvalidateCachedRegion(loc.Region)
+// SplitRegions invalidates the routes that were used to perform a successful
+// split. The next request for those keys naturally reloads their child regions.
+// This avoids a PD lookup on every cached point-get execution.
+func (s *tikvStore) SplitRegions(ctx context.Context, splitKeys [][]byte, scatter bool, tableID *int64) (regionIDs []uint64, err error) {
+	regionIDs, err = s.KVStore.SplitRegions(ctx, splitKeys, scatter, tableID)
+	if len(regionIDs) == 0 {
+		return regionIDs, err
 	}
-	_, err := cache.LocateKey(tikv.NewBackoffer(ctx, refreshRegionCacheMaxBackoff), key)
-	return err
+
+	cache := s.GetRegionCache()
+	for _, key := range splitKeys {
+		if loc := cache.TryLocateKey(key); loc != nil {
+			cache.InvalidateCachedRegion(loc.Region)
+		}
+	}
+	return regionIDs, err
 }
 
 type tikvStore struct {
